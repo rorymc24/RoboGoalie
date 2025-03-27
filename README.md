@@ -195,3 +195,178 @@ if __name__ == "__main__":
     monitor_thread.start()
     main()
 ```
+
+
+
+# The following is the corresponding ardunio script for the project
+
+
+
+
+```
+#include <AccelStepper.h>
+
+// ----- Configuration -----
+#define STEP_PIN               11
+#define DIR_PIN                9
+#define FORWARD_LIMIT_SWITCH   7
+#define BACKWARD_LIMIT_SWITCH  6
+#define ENABLE_SWITCH          2  
+
+const int NUM_REGIONS = 11;       // 11 total regions (0-10)
+const long CALIBRATION_SPEED = 1000; // Calibration speed
+const long RUN_SPEED = 15000;      // Running speed
+
+// ----- Globals -----
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
+long regionSteps[NUM_REGIONS]; // Step positions for each region
+long maxSteps = 0;
+long currentPosition = 0;      // Software position tracking
+
+// Volatile flag used by the ISR to indicate system state changes
+volatile bool systemEnabled = false;
+volatile bool stateChanged = false;
+
+void setup() {
+  pinMode(FORWARD_LIMIT_SWITCH, INPUT_PULLUP);
+  pinMode(BACKWARD_LIMIT_SWITCH, INPUT_PULLUP);
+  pinMode(ENABLE_SWITCH, INPUT_PULLUP); // Use INPUT_PULLUP if wiring so that LOW indicates closed
+
+  Serial.begin(9600);
+
+  // Setup stepper parameters
+  stepper.setMaxSpeed(RUN_SPEED);
+  stepper.setAcceleration(15000); // Tune as needed
+  delay(1000);
+
+  // Attach an interrupt to the enable switch pin
+  attachInterrupt(digitalPinToInterrupt(ENABLE_SWITCH), handleSwitch, CHANGE);
+}
+
+void loop() {
+  // If the switch state changed, handle it in the main loop
+  if (stateChanged) {
+    // Disable interrupts temporarily while reading the volatile flag
+    noInterrupts();
+    bool enabled = systemEnabled;
+    stateChanged = false;
+    interrupts();
+
+    if (enabled) {
+      Serial.println("Switch enabled: Starting calibration.");
+      calibrateMotor();
+    } else {
+      stepper.stop();
+      Serial.println("Switch disabled: System paused.");
+    }
+  }
+
+  // If the system is enabled, run motor commands and check serial input
+  if (systemEnabled) {
+    // Run the stepper to its target
+    stepper.runToPosition();
+
+    // Process serial commands if available
+    if (Serial.available() > 0) {
+      String value = Serial.readStringUntil('\n');
+      int targetRegion = value.toInt();
+      Serial.print("Target Region: ");
+      Serial.println(targetRegion);
+
+      if (targetRegion == 100) {
+        Serial.println("Out of bounds -> Move to center (region 5).");
+        moveToRegion(5);
+      } else if (targetRegion >= 0 && targetRegion < NUM_REGIONS) {
+        moveToRegion(targetRegion);
+      } else {
+        Serial.println("Invalid region index received.");
+      }
+    }
+
+    // Optionally check limit switches continuously
+    checkLimitSwitches();
+  }
+}
+
+// Interrupt service routine: update systemEnabled flag
+void handleSwitch() {
+  systemEnabled = digitalRead(ENABLE_SWITCH);
+  stateChanged = true;
+}
+
+void calibrateMotor() {
+  Serial.println("Starting calibration...");
+
+  // 1) Move forward until the forward limit switch is triggered
+  while (digitalRead(FORWARD_LIMIT_SWITCH) == HIGH) {
+    stepper.setSpeed(CALIBRATION_SPEED);
+    stepper.runSpeed();
+  }
+  Serial.println("Forward limit switch triggered");
+  delay(500);
+
+  // 2) Move backward until the backward limit switch is triggered
+  stepper.setCurrentPosition(0);
+  while (digitalRead(BACKWARD_LIMIT_SWITCH) == HIGH) {
+    stepper.setSpeed(-CALIBRATION_SPEED);
+    stepper.runSpeed();
+  }
+  Serial.println("Backward limit switch triggered");
+
+  // Use the absolute value of the stepper's position as the total steps
+  maxSteps = labs(stepper.currentPosition());
+  Serial.print("Total steps found: ");
+  Serial.println(maxSteps);
+
+  // 3) Calculate region boundaries
+  long regionStepSize = maxSteps / (NUM_REGIONS - 1);
+  for (int i = 1; i <= NUM_REGIONS; i++) {
+    regionSteps[i] = i * regionStepSize;
+  }
+
+  Serial.println("Regions:");
+  for (int i = 1; i <= NUM_REGIONS; i++) {
+    Serial.print("Region ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(regionSteps[i]);
+  }
+  delay(500);
+
+  // 4) Move to the center region (region 5)
+  stepper.setCurrentPosition(11);
+  delay(500);
+  moveToRegion(5);
+
+  Serial.println("Calibration complete.");
+  delay(500);
+}
+
+void moveToRegion(int region) {
+  if (region < 0 || region >= NUM_REGIONS) {
+    Serial.println("Error: Requested out-of-bounds region.");
+    return;
+  }
+  long targetSteps = regionSteps[region];
+  Serial.print("Moving from steps ");
+  Serial.print(stepper.currentPosition());
+  Serial.print(" to ");
+  Serial.println(targetSteps);
+
+  stepper.moveTo(targetSteps);
+  currentPosition = targetSteps;
+}
+
+// Optional: continuous limit switch checking
+void checkLimitSwitches() {
+  if (stepper.speed() > 0 && digitalRead(FORWARD_LIMIT_SWITCH) == LOW) {
+    Serial.println("Forward limit reached! Stopping.");
+    stepper.stop();
+  }
+  if (stepper.speed() < 0 && digitalRead(BACKWARD_LIMIT_SWITCH) == LOW) {
+    Serial.println("Backward limit reached! Stopping.");
+    stepper.stop();
+  }
+}
+
+```
