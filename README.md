@@ -1,3 +1,9 @@
+# The following is a college project python script for the robo goalie project.
+
+
+
+
+```
 import threading
 import numpy as np
 import cv2
@@ -188,4 +194,4 @@ if __name__ == "__main__":
     monitor_thread = threading.Thread(target=serial_monitor, daemon=True)
     monitor_thread.start()
     main()
-
+```
